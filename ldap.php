@@ -50,6 +50,7 @@ class LDAPHelperEntry {
 
         if ($entryid !== null) {
             $syntax = null;
+            $this->Entry['dn'] = ldap_get_dn($this->Conn, $entryid);
             for ($attr = strtolower(ldap_first_attribute($this->Conn, $entryid)); $attr; $attr = strtolower(ldap_next_attribute($this->Conn, $entryid))) {
                 $this->Entry['current'][$attr] = $this->Server->getValue($entryid, $attr, $syntax);
                 $this->Entry['syntax'][$attr] = $syntax;
@@ -124,7 +125,7 @@ class LDAPHelperEntry {
         if ($writer === null) {
             return false; // no writer available
         }
-        return ldap_modify_batch($writer->getConnection(), $this->Entry['dn'], $this->Entry['mods']);
+        return @ldap_modify_batch($writer->getConnection(), $this->Entry['dn'], $this->Entry['mods']);
     }
 
     /* get all attribute by removing option */
@@ -206,6 +207,7 @@ class LDAPHelperResult {
     }
 
     function firstEntry() {
+        if ($this->Result === null || $this->Result === false) { return null; }
         $this->currentEntry = ldap_first_entry($this->Conn, $this->Result);
         if ($this->currentEntry === false) { return false; }
         return $this->Server->getEntry($this->currentEntry);
@@ -249,6 +251,10 @@ class LDAPHelperServer
             return $this;
         }
         return null;
+    }
+
+    function isReadonly() {
+        return $this->Readonly;
     }
 
     function setReadonly()
@@ -519,7 +525,21 @@ class LDAPHelper
         return ['schemas' => $Schemas, 'contexts' => $Contexts];
     }
 
-    private function connectServer($uri, $bindtype = 'simple', $bindopts = ['dn' => null, 'password' => null])
+    function addServer($uri, $bindtype = 'simple', $bindopts = [], $readonly = false)
+    {
+        $this->ReadersWriters = false;
+        $server = $this->connectServer($uri, $bindtype, $bindopts);
+        if ($server) {
+            if ($readonly) {
+                $server->setReadonly();
+                $this->Readers[] = $server;
+            } else {
+                $this->Writers[] = $server;
+            }
+        }
+    }
+
+    private function connectServer($uri, $bindtype = 'simple', $bindopts = [])
     {
         $conn = ldap_connect($uri);
         if (!$conn) {
@@ -545,6 +565,27 @@ class LDAPHelper
                     ldap_close($conn);
                     return false;
                 }
+            break;
+            case 'sasl':
+                foreach(['dn', 'password', 'mech', 'realm', 'authcid', 'authzid', 'secprops'] as $opt) {
+                    if (!isset($bindopts[$opt])) {
+                        $bindopts[$opt] = NULL;
+                    }
+                }
+                if (!ldap_sasl_bind(
+                    $conn,
+                    $bindopts['dn'],
+                    $bindopts['password'],
+                    $bindopts['mech'],
+                    $bindopts['realm'],
+                    $bindopts['authcid'],
+                    $bindopts['authzid'],
+                    $bindopts['secprops']
+                )) {
+                    ldap_close($conn);
+                    return false;
+                }
+            break;
         }
 
         $server = new LDAPHelperServer($uri, $conn);
@@ -674,20 +715,6 @@ class LDAPHelper
         }
     }
 
-    function addServer($uri, $bindtype = 'simple', $bindopts = ['dn' => null, 'password' => null], $readonly = false)
-    {
-        $this->ReadersWriters = false;
-        $server = $this->connectServer($uri, $bindopts, $bindtype);
-        if ($server) {
-            if ($readonly) {
-                $server->setReadonly();
-                $this->Readers[] = $server;
-            } else {
-                $this->Writers[] = $server;
-            }
-        }
-    }
-
     private function setWriterToReaders () {
         if ($this->ReadersWriters) 
         {
@@ -713,17 +740,17 @@ class LDAPHelper
             case 'BAse':
             case 'BASe':
             case 'BASE':
-                return [new LDAPHelperResult(ldap_read($server->getConnection(), $base, $filter, $attrs), $server)];
+                return [new LDAPHelperResult(@ldap_read($server->getConnection(), $base, $filter, $attrs), $server)];
             case 'one':
             case 'One':
             case 'ONe':
             case 'ONE':
-                return [new LDAPHelperResult(ldap_list($server->getConnection(), $base, $filter, $attrs), $server)];
+                return [new LDAPHelperResult(@ldap_list($server->getConnection(), $base, $filter, $attrs), $server)];
             case 'sub':
             case 'Sub':
             case 'SUb':
             case 'SUB':
-                return [new LDAPHelperResult(ldap_search($server->getConnection(), $base, $filter, $attrs), $server)];
+                return [new LDAPHelperResult(@ldap_search($server->getConnection(), $base, $filter, $attrs), $server)];
         }
         return [];
     }
@@ -765,17 +792,17 @@ class LDAPHelper
             case 'BAse':
             case 'BASe':
             case 'BASE':
-                $results = ldap_read($conns, $base, $filter, $attrs);
+                $results = @ldap_read($conns, $base, $filter, $attrs);
             case 'one':
             case 'One':
             case 'ONe':
             case 'ONE':
-                $results = ldap_list($conns, $base, $filter, $attrs);
+                $results = @ldap_list($conns, $base, $filter, $attrs);
             case 'sub':
             case 'Sub':
             case 'SUb':
             case 'SUB':
-                $results = ldap_search($conns, $base, $filter, $attrs);
+                $results = @ldap_search($conns, $base, $filter, $attrs);
         }
 
         $retval = [];
