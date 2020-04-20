@@ -35,6 +35,160 @@ const LDAPHELPER_SYNTAXES = [
     '1.3.6.1.1.16.1' => ['name' => 'uuid', 'binary' => false]
 ];
 
+class LDAPHelperEntry {
+    function __construct($entryid, LDAPHelperServer $server) 
+    {
+        $this->Server = $server;
+        $this->Conn = $server->getConnection();
+        $this->Entry = [
+            'dn' => null,
+            'current' => [],
+            'syntax' => [],
+            'unopted' => [],
+            'mods' => []
+        ];
+
+        if ($entryid !== null) {
+            $syntax = null;
+            for ($attr = strtolower(ldap_first_attribute($this->Conn, $entryid)); $attr; $attr = strtolower(ldap_next_attribute($this->Conn, $entryid))) {
+                $this->Entry['current'][$attr] = $this->Server->getValue($entryid, $attr, $syntax);
+                $this->Entry['syntax'][$attr] = $syntax;
+                $unopted = $this->unoptName($attr);
+                if (!isset($this->Entry['unopted'][$unopted])) {
+                    $this->Entry['unopted'][$unopted] = [$attr];
+                } else {
+                    if (!in_array($attr, $this->Entry['unopted'][$unopted])) {
+                        $this->Entry['unopted'][$unopted][] = $attr;
+                    }
+                }
+            }
+        }
+    }
+
+    private function unoptName($name) 
+    {
+        return strtolower(explode(';', $name)[0]);
+    }
+
+    private function cli_dump() 
+    {
+        foreach ($this->Entry['current'] as $attr => $values) {
+            echo $attr . '(' . $this->unoptName($attr) . ') {' . PHP_EOL;
+            if ($this->Entry['syntax'][$attr]['binary']) {
+                foreach ($values as $value) {
+                    echo "\t" . base64_encode($value) . PHP_EOL;
+                }
+            } else {
+                foreach ($values as $value) {
+                    echo "\t" . $value . PHP_EOL;
+                }
+            }
+            echo '}' . PHP_EOL;
+        }
+    }
+
+    private function web_dump() 
+    {
+        foreach ($this->Entry['current'] as $attr => $values) {
+            echo '<dl><dt>' . $attr . ' (' . $this->unoptName($attr) . ')</dt>' . PHP_EOL;
+            if ($this->Entry['syntax'][$attr]['binary']) {
+                foreach ($values as $value) {
+                    echo '<dd>'. base64_encode($value) . '</dd>' . PHP_EOL;
+                }
+            } else {
+                foreach ($values as $value) {
+                    echo '<dd>'. $value . '</dd>' . PHP_EOL;
+                }
+            }
+            echo '</dl>' . PHP_EOL;
+        }
+    }
+
+    function dump() {
+        if (php_sapi_name() === 'cli') {
+            $this->cli_dump();
+        } else {
+            $this->web_dump();
+        }
+    }
+
+    function rollback() 
+    {
+        $this->Entry['mods'] = [];
+        return true;
+    }
+
+    function commit() 
+    {
+        $writer = $this->Server->getWriter();
+        if ($writer === null) {
+            return false; // no writer available
+        }
+        return ldap_modify_batch($writer->getConnection(), $this->Entry['dn'], $this->Entry['mods']);
+    }
+
+    /* get all attribute by removing option */
+    function getAll($attr) {
+        $unopted = $this->unoptName($attr);
+        $retval = [];
+        foreach ($this->Entry['unopted'][$unopted] as $name) {
+            $retval[] = ['name' => $name, 'value' => $this->Entry['current'][$name]];
+        }
+        return $retval;
+    }
+
+    function get($attr) {
+        if (isset($this->Entry['current'][$attr])) {
+            return $this->Entry['current'][$attr];
+        }
+        return null;
+    }
+
+    function replace($attr, $values) 
+    {
+        if (!isset($this->Entry['current'][$attr])) {
+            return $this->add($attr, $values);
+        } else {
+            $this->Entry['mods'][] = [
+                'modtype' => LDAP_MODIFY_BATCH_REPLACE,
+                'attrib' => $attr,
+                'values' => $values
+            ];
+        }
+        return true;
+    }
+
+    function add($attr, $values)
+    {
+        $this->Entry['mods'][] = [
+            'modtype' => LDAP_MODIFY_BATCH_ADD,
+            'attrib' => $attr,
+            'values' => $values
+        ];
+        return true;
+    }
+
+    function delete($attr, $values = null) 
+    {
+        if (!isset($this->Entry['current'][$attr])) {
+            return false;
+        }
+        if ($values === null) {
+            $this->Entry['mods'][] = [
+                'modtype' => LDAP_MODIFY_BATCH_REMOVE_ALL,
+                'attrib' => $attr
+            ];
+        } else {
+            $this->Entry['mods'][] = [
+                'modtype' => LDAP_MODIFY_BATCH_REMOVE,
+                'attrib' => $attr,
+                'values' => $values
+            ];
+        }
+        return true;
+    }
+}
+
 class LDAPHelperResult {
     function __construct($result, LDAPHelperServer $server) {
         $this->Result = $result;
@@ -68,9 +222,11 @@ class LDAPHelperServer
 {
     function __construct($uri, $conn)
     {
+        $this->UseHelperEntry = true;
         $this->URI = $uri;
         $this->Conn = $conn;
         $this->Readonly = false;
+        $this->Writer = null;
         $this->Schemas = [];
         $this->Contexts = [];
         $this->Syntaxes = [];
@@ -78,6 +234,21 @@ class LDAPHelperServer
 
     function getConnection() {
         return $this->Conn;
+    }
+
+    function setWriter($writer) {
+        $this->Writer = $writer;
+    }
+
+    function getWriter() {
+        if ($this->Writer !== null) 
+        { 
+            return $this->Writer; 
+        }
+        if ($this->Writer === null && $this->Readonly !== true) {
+            return $this;
+        }
+        return null;
     }
 
     function setReadonly()
@@ -93,6 +264,21 @@ class LDAPHelperServer
     function setContext($contexts)
     {
         $this->Contexts = $contexts;
+    }
+
+    function getContext()
+    {
+        return $this->Contexts;
+    }
+
+    function isServerInSameContext($server) {
+        $otherContexts = $server->getContext();
+        foreach ($otherContexts as $ctx1) {
+            foreach ($this->Contexts as $ctx2) {
+                if ($ctx1 === $ctx2) { return true; }
+            }
+        }
+        return false;
     }
 
     function checkContext($base)
@@ -139,11 +325,15 @@ class LDAPHelperServer
         return $entry;
     }
 
+    // attribute can have options, remove the option part
+    private function unoptName($name) 
+    {
+        return explode(';', $name)[0];
+    }
+
     /* return objectclasses or attributetype if it exists */
     private function _exists($name, $attribute = true)
     {
-        $name = strtolower($name);
-        $found = false;
         $type = 'attributetypes';
         if (!$attribute) {
             $type = 'objectclasses';
@@ -170,6 +360,7 @@ class LDAPHelperServer
     }
 
     function syntax ($name) {
+        $name = strtolower($this->unoptName($name));
         if (empty($this->Syntaxes[$name])) {
             $description = $this->describe($name);
 
@@ -185,6 +376,7 @@ class LDAPHelperServer
 
     function describe($name, $attribute = true)
     {
+        $name = strtolower($this->unoptName($name));
         $entry = $this->_exists($name, $attribute);
         if ($entry === false) {
             return false;
@@ -196,7 +388,7 @@ class LDAPHelperServer
         return $this->_exists($name, $attribute) === false ? false : true;
     }
     
-    function getValue($entryid, $attr)
+    function getValue($entryid, $attr, &$syntax = null)
     {
         $binary = false;
 
@@ -212,7 +404,7 @@ class LDAPHelperServer
         return $val;
     }
 
-    function getEntry($entryid)
+    private function _getEntry($entryid)
     {
         $entry = [];
         for ($attr = ldap_first_attribute($this->Conn, $entryid); $attr; $attr = ldap_next_attribute($this->Conn, $entryid)) {
@@ -220,13 +412,30 @@ class LDAPHelperServer
         }
         return $entry;
     }
-}
+
+    /* use helper entry */
+    private function _getHelperEntry($entryid)
+    {
+        return new LDAPHelperEntry($entryid, $this);
+    }
+
+    function getEntry($entryid) 
+    {
+        if ($this->UseHelperEntry) {
+            return $this->_getHelperEntry($entryid);
+        } else {
+            return $this->_getEntry($entryid);
+        }
+    }
+ }
 
 class LDAPHelper
 {
     function __construct()
     {
-        $this->Servers = [];
+        $this->Writers = [];
+        $this->Readers = [];
+        $this->ReadersWriters = false;
     }
 
     public function empty($entry)
@@ -467,35 +676,54 @@ class LDAPHelper
 
     function addServer($uri, $bindtype = 'simple', $bindopts = ['dn' => null, 'password' => null], $readonly = false)
     {
+        $this->ReadersWriters = false;
         $server = $this->connectServer($uri, $bindopts, $bindtype);
         if ($server) {
             if ($readonly) {
                 $server->setReadonly();
+                $this->Readers[] = $server;
+            } else {
+                $this->Writers[] = $server;
             }
-            $this->Servers[] = $server;
         }
+    }
+
+    private function setWriterToReaders () {
+        if ($this->ReadersWriters) 
+        {
+            return; // done and no server added
+        }
+        foreach ($this->Readers as $reader) {
+            foreach ($this->Writers as $writer) {
+                if ($reader->isServerInSameContext($writer)) {
+                    $reader->setWriter($writer);
+                break;
+                }
+            }
+        }
+        $this->ReadersWriters = true;
     }
 
     private function searchSingle($base, $filter, $attrs, $scope): array
     {
-        $conn = $this->Servers[0]->getConnection();
+        $server = count($this->Readers) === 1 ? $this->Readers[0] : $this->Writers[0];
         switch ($scope) {
             case 'base':
             case 'Base':
             case 'BAse':
             case 'BASe':
             case 'BASE':
-                return [new LDAPHelperResult(ldap_read($conn, $base, $filter, $attrs), $this->Servers[0])];
+                return [new LDAPHelperResult(ldap_read($server->getConnection(), $base, $filter, $attrs), $server)];
             case 'one':
             case 'One':
             case 'ONe':
             case 'ONE':
-                return [new LDAPHelperResult(ldap_list($conn, $base, $filter, $attrs), $this->Servers[0])];
+                return [new LDAPHelperResult(ldap_list($server->getConnection(), $base, $filter, $attrs), $server)];
             case 'sub':
             case 'Sub':
             case 'SUb':
             case 'SUB':
-                return [new LDAPHelperResult(ldap_search($conn, $base, $filter, $attrs), $this->Servers[0])];
+                return [new LDAPHelperResult(ldap_search($server->getConnection(), $base, $filter, $attrs), $server)];
         }
         return [];
     }
@@ -506,24 +734,27 @@ class LDAPHelper
         $conns = [];
         $ctxs = [];
         $i = 0;
-        foreach ($this->Servers as $server) {
-            if ($server->checkContext($base)) {
-                /* if base already in list, we prefere readonly server */
-                if (isset($ctxs[$base])) {
-                    $j = $ctxs[$base];
-                    if ($servers[$j]->isReadonly()) {
+        foreach ([$this->Readers, $this->Writers] as $servers)
+        {
+            foreach ($servers as $server) {
+                if ($server->checkContext($base)) {
+                    /* if base already in list, we prefere readonly server */
+                    if (isset($ctxs[$base])) {
+                        $j = $ctxs[$base];
+                        if ($servers[$j]->isReadonly()) {
+                            continue;
+                        }
+                        if ($server->isReadonly()) {
+                            $servers[$j] = $server;
+                            $conns[$j] = $server->getConnection();
+                        }
                         continue;
                     }
-                    if ($server->isReadonly()) {
-                        $servers[$j] = $server;
-                        $conns[$j] = $server->getConnection();
-                    }
-                    continue;
+                    $ctxs[$base] = $i;
+                    $servers[$i] = $server;
+                    $conns[$i] = $server->getConnection();
+                    $i++;
                 }
-                $ctxs[$base] = $i;
-                $servers[$i] = $server;
-                $conns[$i] = $server->getConnection();
-                $i++;
             }
         }
 
@@ -557,8 +788,9 @@ class LDAPHelper
 
     function search($base, $filter, $attr, $scope):array
     {
+        $this->setWriterToReaders(); // make sure we linked writers to readers
         $result = [];
-        if (count($this->Servers) === 1) {
+        if (count($this->Writers) + count($this->Readers) === 1) {
             $result = $this->searchSingle($base, $filter, $attr, $scope);
         } else {
             $result = $this->searchMultiple($base, $filter, $attr, $scope);
