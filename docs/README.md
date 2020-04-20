@@ -8,6 +8,9 @@ The php-ldap extension took too much of the un-good side of the C API and not en
 What is nice with LDAP protocol is its way of dealing with queries and results. Event based modern web programming is already there. You can start processing while still having not all data in. It doesn't mean it is implemented that way, but it could be implemented that way. So when you send a query, you receive the first object, process it and get to the second that might have been received in between.
 
 ```php
+$conn = ldap_connect(....);
+ldap_set_option(....);
+ldap_bind(....);
 $result = ldap_search($conn, ....);
 for ($entryid = ldap_first_entry($conn, $result); $entryid; $entryid = ldap_next_entry($conn, $entryid)) {
     $entry = []
@@ -21,7 +24,7 @@ for ($entryid = ldap_first_entry($conn, $result); $entryid; $entryid = ldap_next
 }
 ```
 
-Very C-like. With the helper, most of the boilerplate is done :
+Very C-like. With the helper, most of the boilerplate is done. By default it returns an entry object (LDAPHelperEntry) :
 
 ```php
 $helper = new LDAPHelper();
@@ -29,7 +32,7 @@ $helper->addServer(....);
 $results = $helper->search(....);
 foreach ($results as $result) {
     for ($entry = $result->firstEntry(); $result; $entry = $result->nextEntry()) {
-        print_r($entry)
+        $entry->dump()
     }
 }
 ```
@@ -49,5 +52,3 @@ $helper->addServer('ldaps://delegated.example.com', 'simple', ['dn' => 'cn=admin
 $results = $helper->search('dc=example,dc=com', '(objectclass=inetorgperson)', ['*'], 'sub');
 ```
 A subtree search on two servers. The 'ldapi:///' and 'ldaps://write.example.com' serve 'dc=example,dc=com' so the readonly is prefered (we are doing a readonly operation). And the delegated is also queried as the search happen at an upper level.
-
-
