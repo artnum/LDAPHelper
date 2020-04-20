@@ -52,3 +52,37 @@ $helper->addServer('ldaps://delegated.example.com', 'simple', ['dn' => 'cn=admin
 $results = $helper->search('dc=example,dc=com', '(objectclass=inetorgperson)', ['*'], 'sub');
 ```
 A subtree search on two servers. The 'ldapi:///' and 'ldaps://write.example.com' serve 'dc=example,dc=com' so the readonly is prefered (we are doing a readonly operation). And the delegated is also queried as the search happen at an upper level.
+
+## Adding entry
+To add entry, create a LDAPHelper, add some server and create a LDAPHelperEntry. Set the DN, add attributes and you are done.
+
+```php
+$helper = new LDAPHelper();
+$helper->addServer(....);
+$helper->addServer(....);
+$helper->addServer(....);
+
+$newEntry = new LDAPHelperEntry($helper);
+// if you have a server with naming context dc=example,dc=com it will be choosen
+$newEntry->dn('cn=test,dc=example,dc=com');
+$newEntry->add('objectclass', ['person']);
+$newEntry->add('sn', ['test']); // person must have sn attribute
+$newEntry->commit()
+```
+
+## Modifying entry
+When you have an LDAPHelperEntry, you can modify quite easily
+
+```php
+$helper = new LDAPHelper();
+$helper->addServer(....);
+$helper->addServer(....);
+$helper->addServer(....);
+
+$results = $helper->search(....);
+$entry = $results->firstEntry();
+$entry->replace('sn', ['test']);
+$entry->commit();
+```
+
+You can replace, add or delete any attribute. If you want to cancel all modification, you have rollback instead of commit.
