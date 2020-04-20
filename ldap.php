@@ -36,17 +36,27 @@ const LDAPHELPER_SYNTAXES = [
 ];
 
 class LDAPHelperEntry {
-    function __construct($entryid, LDAPHelperServer $server) 
+    function __construct($server, $entryid = null) 
     {
-        $this->Server = $server;
-        $this->Conn = $server->getConnection();
         $this->Entry = [
+            'new' => false,
             'dn' => null,
             'current' => [],
             'syntax' => [],
             'unopted' => [],
             'mods' => []
         ];
+        /* new entry have an LDAPHelper, when dn is set we choose server */
+        if ($server instanceof LDAPHelper) {
+            $this->Entry['new'] = true;
+            $this->Ldap = $server;
+            $this->Server = null;
+            $this->Conn = null;
+        } else {
+            $this->Ldap = null;
+            $this->Server = $server;
+            $this->Conn = $server->getConnection();
+        }
 
         if ($entryid !== null) {
             $syntax = null;
@@ -121,11 +131,44 @@ class LDAPHelperEntry {
 
     function commit() 
     {
-        $writer = $this->Server->getWriter();
-        if ($writer === null) {
-            return false; // no writer available
+        if (!$this->Entry['new']) {
+            $writer = $this->Server->getWriter();
+            if ($writer === null) {
+                return false; // no writer available
+            }
+            return @ldap_modify_batch($writer->getConnection(), $this->Entry['dn'], $this->Entry['mods']);
+        } else {
+            /* rebuild entry for addition */
+            if (empty($this->Entry['dn'])) {
+                return false;
+            }
+            foreach ($this->Entry['mods'] as $mod) {
+                switch ($mod['modtype']) {
+                    case LDAP_MODIFY_BATCH_REPLACE:
+                    case LDAP_MODIFY_BATCH_ADD:
+                        $this->Entry['current'][$mod['attrib']] = $mod['values'];
+                    break;
+                }
+            }
+            $rdn = explode('=', explode(',', $this->Entry['dn'])[0], 2);
+            if (empty($this->Entry[$rdn[0]])) {
+                $this->Entry['current'][$rdn[0]] = [$rdn[1]];
+            } else {
+                if (!in_array($rdn[1], $this->Entry['current'][$rdn[0]])) {
+                    $this->Entry['current'][$rdn[0]][] = $rdn[1];
+                }
+            }
+            $writer = $this->Server->getWriter();
+            if (!$writer) {
+                return $false;
+            }
+            $result = @ldap_add($writer->getConnection(), $this->Entry['dn'], $this->Entry['current']);
+            if ($result) {
+                $this->Entry['mods'] = [];
+                $this->Entry['new'] = false;
+            }
+            return $result;
         }
-        return @ldap_modify_batch($writer->getConnection(), $this->Entry['dn'], $this->Entry['mods']);
     }
 
     /* get all attribute by removing option */
@@ -143,6 +186,22 @@ class LDAPHelperEntry {
             return $this->Entry['current'][$attr];
         }
         return null;
+    }
+
+    function dn($dn = null) {
+        if ($dn === null) {
+            return $this->Entry['dn'];
+        } else {
+            // rename or create entry
+            if ($this->Entry['dn'] === null) {
+                $this->Server = $this->Ldap->findServerForDn($dn);
+                if (!$this->Server) { return false; } // no server for DN
+                $this->Conn = $this->Server->getConnection();        
+                $this->Entry['dn'] = $dn;
+            } else {
+
+            }
+        }
     }
 
     function replace($attr, $values) 
@@ -275,6 +334,23 @@ class LDAPHelperServer
     function getContext()
     {
         return $this->Contexts;
+    }
+
+    function isDnInSameContext($dn) {
+        $parts = explode(',', $dn);
+        foreach ($this->Contexts as $ctx) {
+            $ctxParts = explode(',', $ctx);
+            $in = false;
+            while ($ctxRdn = array_pop($ctxParts)) {
+                $dnRdn = array_pop($parts);
+                $in = false;
+                if ($dnRdn === FALSE) { break; }
+                if ($dnRdn !== $ctxRdn) { break; }
+                $in = true;
+            }
+            if ($in) { return true; }
+        }
+        return false;
     }
 
     function isServerInSameContext($server) {
@@ -422,7 +498,7 @@ class LDAPHelperServer
     /* use helper entry */
     private function _getHelperEntry($entryid)
     {
-        return new LDAPHelperEntry($entryid, $this);
+        return new LDAPHelperEntry($this, $entryid);
     }
 
     function getEntry($entryid) 
@@ -537,6 +613,17 @@ class LDAPHelper
                 $this->Writers[] = $server;
             }
         }
+        $this->setWriterToReaders(); // make sure we linked writers to readers
+    }
+
+    function findServerForDn($dn) {
+        // search a reader, writers are linked to readers
+        foreach ($this->Readers as $reader) {
+            if ($reader->isDnInSameContext($dn)) {
+                return $reader;
+            }
+        }
+        return null;
     }
 
     private function connectServer($uri, $bindtype = 'simple', $bindopts = [])
@@ -815,7 +902,6 @@ class LDAPHelper
 
     function search($base, $filter, $attr, $scope):array
     {
-        $this->setWriterToReaders(); // make sure we linked writers to readers
         $result = [];
         if (count($this->Writers) + count($this->Readers) === 1) {
             $result = $this->searchSingle($base, $filter, $attr, $scope);
