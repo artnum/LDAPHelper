@@ -101,3 +101,7 @@ $entry->commit();
 ```
 
 Rename takes care of adding the attribute needed if it has not been added. It won't remove old one, you have to do it.
+
+## Rollback
+
+When changes are made they are done locally. You call commit to apply them on the directory. So it's not a true "rollback". For example, if you rename and modify an entry and the modify fails during the commit, the renaming will still have been applied.
