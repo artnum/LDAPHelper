@@ -36,6 +36,12 @@ const LDAPHELPER_SYNTAXES = [
 ];
 
 class LDAPHelperEntry {
+    private $Entry;
+    private $Ldap;
+    private $lastError;
+    private $Server;
+    private $Conn;
+
     function __construct($server, $entryid = null) 
     {
         $this->Entry = [
@@ -44,7 +50,9 @@ class LDAPHelperEntry {
             'current' => [],
             'syntax' => [],
             'unopted' => [],
-            'mods' => []
+            'mods' => [],
+            'moveTo' => null,
+            'renameTo' => null
         ];
         /* new entry have an LDAPHelper, when dn is set we choose server */
         if ($server instanceof LDAPHelper) {
@@ -123,52 +131,186 @@ class LDAPHelperEntry {
         }
     }
 
+    private function _reset() {
+        $this->Entry['mods'] = [];
+        $this->Entry['renameTo'] = null;
+        $this->Entry['moveTo'] = null;
+        $this->lastError = 0;
+    }
+
     function rollback() 
     {
-        $this->Entry['mods'] = [];
+        $this->_reset();
         return true;
+    }
+
+    private function _moveTo ($conn) {
+        $rdn = explode(',', $this->Entry['dn'])[0];
+        return @ldap_rename($conn, $this->Entry['dn'], $rdn, $this->Entry['moveTo'], true);
+    }
+
+    private function _renameTo ($conn) {
+        $dnParts = explode('=', $this->Entry['renameTo'], 2);
+        if (count ($dnParts) !== 2) {
+            return false;
+        }
+        $addAttr = false;
+        if (!isset($this->Entry['current'][$dnParts[0]])) {
+            $addAttr = true;
+        } else {
+            $addAttr = true;
+            foreach($this->Entry['current'][$dnParts[0]] as $v) {
+                if (strcmp($dnParts[1], $v) === 0) {
+                    $addAttr = false;
+                break;
+                }
+            }
+        }
+        if ($addAttr) {
+            $result = @ldap_mod_add($conn, $this->Entry['dn'], [$dnParts[0] => [$dnParts[1]]]);
+            if (!$result) {
+                return false; 
+            }
+            if (!isset($this->Entry['current'][$dnParts[0]])) {
+                $this->Entry['current'][$dnParts[0]] = [$dnParts[1]];
+            } else {
+                $this->Entry['current'][$dnParts[0]][] = $dnParts[1];
+            }
+
+            /* purge upcoming mods from modification regarding our new rdn */
+            $mods = [];
+            foreach ($this->Entry['mods'] as $modk => $mod) {
+                if ($mod['attrib'] === $dnParts[0]) {
+                    $keys = [];
+                    foreach ($mod['values'] as $k => $v) {
+                        if (strcmp($v, $dnParts[1]) === 0) {
+                            $keys[] = $k;
+                        break;
+                        }
+                    }
+                    foreach ($keys as $k) {
+                        unset($mod['values'][$k]);
+                    }
+                    if (empty($mod['values'])) {
+                        $mods[] = $modk;
+                    }
+                }
+            }
+            foreach ($mods as $k) {
+                unset($this->Entry['mods'][$k]);
+            }
+        }
+
+        $result = @ldap_rename($conn, $this->Entry['dn'], $this->Entry['renameTo'], NULL, false);
+        if ($result) {
+            $this->Entry['dn'] = $this->Entry['renameTo'] . ',' . explode(',', $this->Entry['dn'], 2)[1];
+        }
+        return $result;
+    }
+
+    function lastError() {
+        return [$this->lastError, ldap_err2str($this->lastError)];
     }
 
     function commit() 
     {
-        if (!$this->Entry['new']) {
-            $writer = $this->Server->getWriter();
-            if ($writer === null) {
-                return false; // no writer available
-            }
-            return @ldap_modify_batch($writer->getConnection(), $this->Entry['dn'], $this->Entry['mods']);
-        } else {
-            /* rebuild entry for addition */
-            if (empty($this->Entry['dn'])) {
-                return false;
-            }
-            foreach ($this->Entry['mods'] as $mod) {
-                switch ($mod['modtype']) {
-                    case LDAP_MODIFY_BATCH_REPLACE:
-                    case LDAP_MODIFY_BATCH_ADD:
-                        $this->Entry['current'][$mod['attrib']] = $mod['values'];
-                    break;
-                }
-            }
-            $rdn = explode('=', explode(',', $this->Entry['dn'])[0], 2);
-            if (empty($this->Entry[$rdn[0]])) {
-                $this->Entry['current'][$rdn[0]] = [$rdn[1]];
-            } else {
-                if (!in_array($rdn[1], $this->Entry['current'][$rdn[0]])) {
-                    $this->Entry['current'][$rdn[0]][] = $rdn[1];
-                }
-            }
-            $writer = $this->Server->getWriter();
-            if (!$writer) {
-                return $false;
-            }
-            $result = @ldap_add($writer->getConnection(), $this->Entry['dn'], $this->Entry['current']);
-            if ($result) {
-                $this->Entry['mods'] = [];
-                $this->Entry['new'] = false;
-            }
-            return $result;
+        $conn = null;
+
+        $writer = $this->Server->getWriter();
+        if ($writer === null) {
+            return false;
         }
+        $conn = $writer->getConnection();
+        if ($conn === null) {
+            return false;
+        }
+
+        $result = true;
+
+        if ($this->Entry['renameTo'] !== null) {
+            $result = $this->_renameTo($conn);
+        }
+        
+        if ($result) {
+            if (!$this->Entry['new']) {
+                if (count($this->Entry['mods']) > 0) {
+                    $result = @ldap_modify_batch($conn, $this->Entry['dn'], $this->Entry['mods']);
+                    if ($result) {
+                        /* reflect modification on current entry */
+                        foreach ($this->Entry['mods'] as $mod) {
+                            switch ($mod['modtype']) {
+                                case LDAP_MODIFY_BATCH_ADD:
+                                    if (!isset($this->Entry['current'][$mod['attrib']])) {
+                                        $this->Entry['current'][$mod['attrib']] = $mod['values'];
+                                    } else {
+                                        $this->Entry['current'][$mod['attrib']] = array_merge($this->Entry['current'][$mod['attrib']], $mod['values']);
+                                    }
+                                break;
+                                case LDAP_MODIFY_BATCH_REPLACE:
+                                    $this->Entry['current'][$mod['attrib']] = $mod['values'];
+                                break;
+                                case LDAP_MODIFY_BATCH_REMOVE_ALL:
+                                    unset($this->Entry['current'][$mod['attrib']]);
+                                break;
+                                case LDAP_MODIFY_BATCH_REMOVE:
+                                    $keys = [];
+                                    foreach ($this->Entry['current'][$mod['attrib']] as $k => $v1) {
+                                        foreach ($mod['values'] as $v2) {
+                                            if (strcmp($v1, $v2) === 0 && !in_array($k, $keys)) {
+                                                $keys[] = $k;
+                                            }
+                                        }
+                                    }
+                                    foreach($keys as $k) {
+                                        unset($this->Entry['current'][$mod['attrib']][$k]);
+                                    }
+                                    /* empty attribute are removed */
+                                    if (empty($this->Entry['current'][$mod['attrib']])) {
+                                        unset($this->Entry['current'][$mod['attrib']]);
+                                    }
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    $result = true;
+                }
+            } else {
+                if (empty($this->Entry['dn'])) {
+                    return false;
+                }
+                /* build entry for addition */
+                foreach ($this->Entry['mods'] as $mod) {
+                    switch ($mod['modtype']) {
+                        case LDAP_MODIFY_BATCH_REPLACE:
+                        case LDAP_MODIFY_BATCH_ADD:
+                            $this->Entry['current'][$mod['attrib']] = $mod['values'];
+                        break;
+                    }
+                }
+                $rdn = explode('=', explode(',', $this->Entry['dn'])[0], 2);
+                if (empty($this->Entry[$rdn[0]])) {
+                    $this->Entry['current'][$rdn[0]] = [$rdn[1]];
+                } else {
+                    if (!in_array($rdn[1], $this->Entry['current'][$rdn[0]])) {
+                        $this->Entry['current'][$rdn[0]][] = $rdn[1];
+                    }
+                }
+                $result = @ldap_add($conn, $this->Entry['dn'], $this->Entry['current']);
+            }
+        }
+
+        if ($result && $this->Entry['moveTo'] !== null) {
+            $result = $this->_moveTo($conn);
+        }
+
+        $this->lastError = ldap_errno($conn);
+        if ($result) {
+            $this->Entry['new'] = false;
+            $this->_reset();
+        }
+
+        return $result;
     }
 
     /* get all attribute by removing option */
@@ -186,6 +328,28 @@ class LDAPHelperEntry {
             return $this->Entry['current'][$attr];
         }
         return null;
+    }
+
+    function rename($newRdn) {
+        /* no dn -> no rename */
+        if ($this->Entry['dn'] === null) {
+            return false;
+        }
+        $this->Entry['renameTo'] = $newRdn;
+        return true;
+    }
+
+    function move($newRdn) {
+        /* no known server if no DN set */
+        if ($this->Entry['dn'] === null) {
+            return false;
+        }
+        /* no support for moving between servers ... but can be implemented in some way */
+        if (!$this->Server->isDnInSameContext($newRdn)) {
+            return false;
+        }
+        $this->Entry['moveTo'] = $newRdn;
+        return true;
     }
 
     function dn($dn = null) {
@@ -258,6 +422,7 @@ class LDAPHelperResult {
     }
 
     function count() {
+        if ($this->Result === null || $this->Result === false) { return 0; }
         $retval = ldap_count_entries($this->Conn, $this->Result);
         if ($retval === false) {
             return 0;
@@ -366,7 +531,7 @@ class LDAPHelperServer
     function checkContext($base)
     {
         foreach ($this->Contexts as $ctx) {
-            if ($base === $ctx) {
+            if (strstr($base, $ctx)) {
                 return true;
             }
         }
@@ -871,7 +1036,9 @@ class LDAPHelper
                 }
             }
         }
-
+        if (count($conns) === 0) {
+            return [];
+        }
         $results = [];
         switch ($scope) {
             case 'base':
@@ -893,8 +1060,12 @@ class LDAPHelper
         }
 
         $retval = [];
-        foreach ($results as $k => $value) {
-            $retval[] = new LDAPHelperResult($value, $servers[$k]);            
+        if (!is_array($results)) {
+            $retval[] = new LDAPHelperResult($results, $servers[0]);
+        } else {
+            foreach ($results as $k => $value) {
+                $retval[] = new LDAPHelperResult($value, $servers[$k]);            
+            }
         }
 
         return $retval;

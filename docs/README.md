@@ -86,3 +86,18 @@ $entry->commit();
 ```
 
 You can replace, add or delete any attribute. If you want to cancel all modification, you have rollback instead of commit.
+
+When a commit is done, the values of the object reflect what is on the LDAP server without reading it back, a copy is kept locally and changes are applied to it.
+
+## Moving/renaming entry
+
+You can move an entry. The operation is done inline with modification and/or renaming. You can add, replace, delete, move and rename in one commit. The operation is done sequentially : renaming is done, add/replace/delete is done if it succeed and then moving is done. So it would be like :
+
+```php
+$entry->delete('sn', ['test']);
+$entry->move('ou=newparent,dc=example,dc=com');
+$entry->rename('sn=test2');
+$entry->commit();
+```
+
+Rename takes care of adding the attribute needed if it has not been added. It won't remove old one, you have to do it.
