@@ -53,6 +53,27 @@ $results = $helper->search('dc=example,dc=com', '(objectclass=inetorgperson)', [
 ```
 A subtree search on two servers. The 'ldapi:///' and 'ldaps://write.example.com' serve 'dc=example,dc=com' so the readonly is prefered (we are doing a readonly operation). And the delegated is also queried as the search happen at an upper level.
 
+## Add server
+
+Suppose you have an OpenLDAP running on Linux. Let's say the web server process runs with user id 33(www-data) and group id 33(www-data). Let's say you run your server on unix socket (ldapi://) and on ldap://localhost. Let's say you have the following acl access on you OpenLDAP configuration :
+
+```
+olcAccess: {0}to * by dn.exact=gidNumber=0+uidNumber=0,cn=peercred,cn=external,cn=auth manage by * break
+olcAccess: {1}to * by dn.exact=gidNumber=33+uidNumber=33,cn=peercred,cn=external,cn=auth write by * break
+olcAccess: {2}to * by * read
+```
+
+Which means that root user can manage the server, www-data user can write and anyone can read it (it is not how you want to configure you production server). You would add two servers :
+
+```php
+$helper = new LDAPHelper();
+$helper->addServer('ldapi:///', 'sasl', ['mech' => 'EXTERNAL']);
+$helper->addServer('ldap://localhost', 'simple', [], true);
+```
+
+Writes would go the ldapi:/// and read to ldap://localhost.
+
+
 ## Adding entry
 To add entry, create a LDAPHelper, add some server and create a LDAPHelperEntry. Set the DN, add attributes and you are done.
 
