@@ -33,7 +33,10 @@ class LDAPHelperEntry {
         }
 
         if ($entryid !== null) {
-            $syntax = null;
+            if ($this->Conn === null) {
+                throw new \Exception('No server connection available');
+            }
+
             $this->Entry['dn'] = ldap_get_dn($this->Conn, $entryid);
             for ($attr = strtolower(ldap_first_attribute($this->Conn, $entryid)); $attr; $attr = strtolower(ldap_next_attribute($this->Conn, $entryid))) {
                 $this->Entry['current'][$attr] = $this->Server->getValue($entryid, $attr, $syntax);
@@ -279,6 +282,13 @@ class LDAPHelperEntry {
         return $result;
     }
 
+    /* allow to foreach over every attribute */
+    function eachAttribute () {
+        foreach ($this->Entry['current'] as $attr => $value) {
+            yield $attr => $value;
+        }
+    }
+
     /* get all attribute by removing option */
     function getAll($attr) {
         $unopted = $this->unoptName($attr);
@@ -329,7 +339,7 @@ class LDAPHelperEntry {
                 $this->Conn = $this->Server->getConnection();        
                 $this->Entry['dn'] = $dn;
             } else {
-
+                return $this->rename($dn);
             }
         }
     }
