@@ -152,6 +152,24 @@ class LDAPHelper
         return null;
     }
 
+    /* get contexts, by default write context */
+    function getNamingContexts($readContexts = false) {
+        $servers = $this->Writers;
+        if ($readContexts) {
+            $servers = $this->Readers;
+        }
+        $contexts = [];
+        foreach($servers as $server) {
+            $ctxs = $server->getContext();
+            foreach ($ctxs as $ctx) {
+                if (!in_array($ctx, $contexts)) {
+                    $contexts[] = $ctx;
+                }
+            }
+        }
+        return $contexts;
+    }
+
     private function connectServer($uri, $bindtype = 'simple', $bindopts = [])
     {
         $conn = ldap_connect($uri);
