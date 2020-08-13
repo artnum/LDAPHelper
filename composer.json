@@ -1,0 +1,18 @@
+{
+    "name": "artnum/ldap-helper",
+    "description": "Helper class to abstract ldap_* functions",
+    "license": "MIT",
+    "keywords": ["ldap", "helper"],
+    "authors": [{
+        "name": "Etienne Bagnoud",
+        "email": "etienne@artnum.ch",
+        "homepage": "https://artnum.ch",
+        "role": "Developper"
+    }],
+    "autoload": {
+        "psr-4": {
+            "artnum\\": "src/"
+        }
+    }
+
+}
