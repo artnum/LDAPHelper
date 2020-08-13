@@ -149,6 +149,12 @@ class LDAPHelper
                 return $reader;
             }
         }
+        // no reader so maybe a lone writer
+        foreach ($this->Writers as $writer) {
+            if ($writer->isDnInSameContext($dn)) {
+                return $writer;
+            }
+        }
         return null;
     }
 
@@ -168,6 +174,21 @@ class LDAPHelper
             }
         }
         return $contexts;
+    }
+
+    function getClasses() {
+        $classes = [];
+        foreach($this->Writers as $server) {
+            $schema = $server->getSchema();
+            if (!empty($schema['objectclasses'])) {
+                foreach ($schema['objectclasses'] as $name => $description) {
+                    if (!in_array($name, $classes)) {
+                        $classes[] = $name;
+                    }
+                } 
+            }
+        }
+        return $classes;
     }
 
     private function connectServer($uri, $bindtype = 'simple', $bindopts = [])
@@ -460,5 +481,15 @@ class LDAPHelper
         }
         return $result;
     }
+
+    function delete($dn) {
+        $server = $this->findServerForDn($dn);
+        if (!$server) { return false; }
+        $writer = $server->getWriter();
+        if (!$writer) { return false; }
+
+        return @ldap_delete($writer->getConnection(), $dn);
+    }
+
 }
 ?>
