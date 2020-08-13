@@ -2,7 +2,6 @@
 
 The php-ldap extension took too much of the un-good side of the C API and not enough of its good side. It also didn't offer the whole power of LDAP. So this helper try to solve all that.
 
-
 ## First and next entry/attribute/whatever
 
 What is nice with LDAP protocol is its way of dealing with queries and results. Event based modern web programming is already there. You can start processing while still having not all data in. It doesn't mean it is implemented that way, but it could be implemented that way. So when you send a query, you receive the first object, process it and get to the second that might have been received in between.
@@ -53,7 +52,9 @@ $results = $helper->search('dc=example,dc=com', '(objectclass=inetorgperson)', [
 ```
 A subtree search on two servers. The 'ldapi:///' and 'ldaps://write.example.com' serve 'dc=example,dc=com' so the readonly is prefered (we are doing a readonly operation). And the delegated is also queried as the search happen at an upper level.
 
-## Add server
+## Usage
+
+### Add server
 
 Suppose you have an OpenLDAP running on Linux. Let's say the web server process runs with user id 33(www-data) and group id 33(www-data). Let's say you run your server on unix socket (ldapi://) and on ldap://localhost. Let's say you have the following acl access on you OpenLDAP configuration :
 
@@ -73,9 +74,10 @@ $helper->addServer('ldap://localhost', 'simple', [], true);
 
 Writes would go the ldapi:/// and read to ldap://localhost.
 
+### Searching an entry
 
-## Adding entry
-To add entry, create a LDAPHelper, add some server and create a LDAPHelperEntry. Set the DN, add attributes and you are done.
+When searching an entry you end up with an array of LDAPHelperResult. The reason is that if you have more that one context or one server, you will have several request running with several result set. So has to keep coherence on usage, search always return an array. Even reading one specific DN might have more than one result as it can be on more than one server.
+Search is doing all the work, you choose the scope (searching the subtree, listing the subtree or reading an object) with the parameter $scope.
 
 ```php
 $helper = new LDAPHelper();
@@ -83,6 +85,34 @@ $helper->addServer(....);
 $helper->addServer(....);
 $helper->addServer(....);
 
+$base = '....';
+$filter = '(objectclass=*)';
+$attrs = ['*'];
+
+$results = $helper->search($base, $filter, $attrs, 'sub'); // subtree search
+// or
+$results = $helper->search($base, $filter, $attrs, 'one'); // list search (one level)
+// or
+$results = $helper->search($base, $filter, $attrs, 'base'); // read object
+
+foreach ($results as $rset) {
+    for($entry = $rset->firstEntry(); $entry; $entry = $rset->nextEntry()) {
+        // process entry
+    }
+}
+```
+
+### Adding entry
+To add entry, create a LDAPHelper, add some server and create a LDAPHelperEntry. Set the DN, add attributes and you are done.
+
+```php
+$helper = new LDAPHelper();
+$helper->addServer(....);
+$helper->addServer(....);
+$helper->addServer(....);$helper = new LDAPHelper();
+$helper->addServer(....);
+$helper->addServer(....);
+$helper->addServer(....);
 $newEntry = new LDAPHelperEntry($helper);
 // if you have a server with naming context dc=example,dc=com it will be choosen
 $newEntry->dn('cn=test,dc=example,dc=com');
@@ -91,7 +121,7 @@ $newEntry->add('sn', ['test']); // person must have sn attribute
 $newEntry->commit()
 ```
 
-## Modifying entry
+### Modifying entry
 When you have an LDAPHelperEntry, you can modify quite easily
 
 ```php
@@ -102,7 +132,9 @@ $helper->addServer(....);
 
 $results = $helper->search(....);
 $entry = $results->firstEntry();
-$entry->replace('sn', ['test']);
+$entry->replace('sn', ['test']); // replace attribute sn
+$entry->delete('l'); // delete attribute l
+$entry->add('postalcode', ['1234567890']); // add attribute postalcode
 $entry->commit();
 ```
 
@@ -110,7 +142,7 @@ You can replace, add or delete any attribute. If you want to cancel all modifica
 
 When a commit is done, the values of the object reflect what is on the LDAP server without reading it back, a copy is kept locally and changes are applied to it.
 
-## Moving/renaming entry
+### Moving/renaming entry
 
 You can move an entry. The operation is done inline with modification and/or renaming. You can add, replace, delete, move and rename in one commit. The operation is done sequentially : renaming is done, add/replace/delete is done if it succeed and then moving is done. So it would be like :
 
@@ -123,6 +155,66 @@ $entry->commit();
 
 Rename takes care of adding the attribute needed if it has not been added. It won't remove old one, you have to do it.
 
-## Rollback
+### Deleting an entry
+
+When you have the DN you juste call delete from the helper :
+
+```php
+$helper = new LDAPHelper();
+$helper->addServer(....);
+$helper->addServer(....);
+$helper->addServer(....);
+
+$dn = '....';
+$helper->delete($dn);
+```
+
+### Get all naming contexts (since 1.0.1)
+
+You can get all naming contexts found on each server (either read server or write server) with getNamingContexts
+```php
+$helper = new LDAPHelper();
+$helper->addServer(....);
+$helper->addServer(....);
+$helper->addServer(....);
+
+$helper->getNamingContexts(); // writers naming contexts
+$helper->getNamingContexts(true); // readers naming contexts
+```
+
+### Iterating over attributes (since 1.0.2)
+
+Once you have an entry, you might want to iterate over each attribute. Use the generator eachAttribute :
+$helper-
+
+```php
+$helper = new LDAPHelper();
+$helper->addServer(....);
+$results = $helper->search(....);
+$entry = $results->firstEntry();
+
+foreach($entry->eachAttribute as $name => $value) {
+    // do what you want with the attribute and its value
+}
+```
+
+### Finding all objectclass supported on every server (since 1.0.2)
+
+If you need to know wich objectclass are present on every server, just use getClasses :
+
+```php
+$helper = new LDAPHelper();
+$helper->addServer(....);
+$helper->addServer(....);
+$helper->addServer(....);
+
+$helper->getClasses(); // an array of all known classes
+```
+
+### Rollback
 
 When changes are made they are done locally. You call commit to apply them on the directory. So it's not a true "rollback". For example, if you rename and modify an entry and the modify fails during the commit, the renaming will still have been applied.
+
+## More examples
+
+To see more example on how to use it, look at project SAddr (Simple Address) which is a simple address book made years ago and being reworked with this helper. It is available at https://github.com/artnum/saddr, features are added as they are needed for that project.
