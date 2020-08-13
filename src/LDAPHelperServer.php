@@ -48,6 +48,11 @@ class LDAPHelperServer
         $this->Schemas = $schemas;
     }
 
+    function getSchema() 
+    {
+        return $this->Schemas;
+    }
+
     function setContext($contexts)
     {
         $this->Contexts = $contexts;
@@ -59,8 +64,8 @@ class LDAPHelperServer
     }
 
     function isDnInSameContext($dn) {
-        $parts = explode(',', $dn);
         foreach ($this->Contexts as $ctx) {
+            $parts = explode(',', $dn);
             $ctxParts = explode(',', $ctx);
             $in = false;
             while ($ctxRdn = array_pop($ctxParts)) {
