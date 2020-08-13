@@ -19,6 +19,7 @@ class LDAPHelperResult {
     }
 
     function firstEntry() {
+        if (!$this->Conn) { return false; }
         if ($this->Result === null || $this->Result === false) { return null; }
         $this->currentEntry = ldap_first_entry($this->Conn, $this->Result);
         if ($this->currentEntry === false) { return false; }
@@ -26,6 +27,7 @@ class LDAPHelperResult {
     }
 
     function nextEntry() {
+        if (!$this->Conn || !$this->currentEntry) { return false; }
         $this->currentEntry = ldap_next_entry($this->Conn, $this->currentEntry);
         if ($this->currentEntry === false) { return false; }
         return $this->Server->getEntry($this->currentEntry);
