@@ -293,8 +293,10 @@ class LDAPHelperEntry {
     function getAll($attr) {
         $unopted = $this->unoptName($attr);
         $retval = [];
-        foreach ($this->Entry['unopted'][$unopted] as $name) {
-            $retval[] = ['name' => $name, 'value' => $this->Entry['current'][$name]];
+        if (isset($this->Entry['unopted'][$unopted])) {
+            foreach ($this->Entry['unopted'][$unopted] as $name) {
+                $retval[] = ['name' => $name, 'value' => $this->Entry['current'][$name]];
+            }
         }
         return $retval;
     }
