@@ -1,6 +1,9 @@
 <?PHP
 namespace artnum;
 
+/* for some reason, return value of ldap_* function don't match the actual
+ * status of the operation. So ldap_errno is used instead
+ */
 class LDAPHelperEntry {
     private $Entry;
     private $Ldap;
@@ -115,7 +118,9 @@ class LDAPHelperEntry {
 
     private function _moveTo ($conn) {
         $rdn = explode(',', $this->Entry['dn'])[0];
-        return @ldap_rename($conn, $this->Entry['dn'], $rdn, $this->Entry['moveTo'], true);
+        @ldap_rename($conn, $this->Entry['dn'], $rdn, $this->Entry['moveTo'], true);
+        $this->lastError = ldap_errno($conn);
+        return $this->lastError === 0;
     }
 
     private function _renameTo ($conn) {
@@ -136,7 +141,9 @@ class LDAPHelperEntry {
             }
         }
         if ($addAttr) {
-            $result = @ldap_mod_add($conn, $this->Entry['dn'], [$dnParts[0] => [$dnParts[1]]]);
+            @ldap_mod_add($conn, $this->Entry['dn'], [$dnParts[0] => [$dnParts[1]]]);
+            $this->lastError = ldap_errno($conn);
+            $result = $this->lastError === 0;
             if (!$result) {
                 return false; 
             }
@@ -170,7 +177,9 @@ class LDAPHelperEntry {
             }
         }
 
-        $result = @ldap_rename($conn, $this->Entry['dn'], $this->Entry['renameTo'], NULL, false);
+        @ldap_rename($conn, $this->Entry['dn'], $this->Entry['renameTo'], NULL, false);
+        $this->lastError = ldap_errno($conn);
+        $result = $this->lastError === 0;
         if ($result) {
             $this->Entry['dn'] = $this->Entry['renameTo'] . ',' . explode(',', $this->Entry['dn'], 2)[1];
         }
@@ -203,7 +212,9 @@ class LDAPHelperEntry {
         if ($result) {
             if (!$this->Entry['new']) {
                 if (count($this->Entry['mods']) > 0) {
-                    $result = @ldap_modify_batch($conn, $this->Entry['dn'], $this->Entry['mods']);
+                    @ldap_modify_batch($conn, $this->Entry['dn'], $this->Entry['mods']);
+                    $this->lastError = ldap_errno($conn);
+                    $result = $this->lastError === 0;
                     if ($result) {
                         /* reflect modification on current entry */
                         foreach ($this->Entry['mods'] as $mod) {
@@ -265,7 +276,9 @@ class LDAPHelperEntry {
                         $this->Entry['current'][$rdn[0]][] = $rdn[1];
                     }
                 }
-                $result = @ldap_add($conn, $this->Entry['dn'], $this->Entry['current']);
+                @ldap_add($conn, $this->Entry['dn'], $this->Entry['current']);
+                $this->lastError = ldap_errno($conn);
+                $result = $this->lastError === 0;
             }
         }
 
@@ -273,7 +286,6 @@ class LDAPHelperEntry {
             $result = $this->_moveTo($conn);
         }
 
-        $this->lastError = ldap_errno($conn);
         if ($result) {
             $this->Entry['new'] = false;
             $this->_reset();
@@ -302,6 +314,7 @@ class LDAPHelperEntry {
     }
 
     function get($attr) {
+        $attr = strtolower($attr);
         if (isset($this->Entry['current'][$attr])) {
             return $this->Entry['current'][$attr];
         }
@@ -348,6 +361,7 @@ class LDAPHelperEntry {
 
     function replace($attr, $values) 
     {
+        $attr = strtolower($attr);
         if (!isset($this->Entry['current'][$attr])) {
             return $this->add($attr, $values);
         } else {
@@ -372,6 +386,7 @@ class LDAPHelperEntry {
 
     function delete($attr, $values = null) 
     {
+        $attr = strtolower($attr);
         if (!isset($this->Entry['current'][$attr])) {
             return false;
         }

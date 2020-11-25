@@ -385,26 +385,36 @@ class LDAPHelper
 
     private function searchSingle($base, $filter, $attrs, $scope): array
     {
-        $server = count($this->Readers) === 1 ? $this->Readers[0] : $this->Writers[0];
-        switch ($scope) {
-            case 'base':
-            case 'Base':
-            case 'BAse':
-            case 'BASe':
-            case 'BASE':
-                return [new LDAPHelperResult(@ldap_read($server->getConnection(), $base, $filter, $attrs), $server)];
-            case 'one':
-            case 'One':
-            case 'ONe':
-            case 'ONE':
-                return [new LDAPHelperResult(@ldap_list($server->getConnection(), $base, $filter, $attrs), $server)];
-            case 'sub':
-            case 'Sub':
-            case 'SUb':
-            case 'SUB':
-                return [new LDAPHelperResult(@ldap_search($server->getConnection(), $base, $filter, $attrs), $server)];
+        if (!is_array($base)) {
+            $base = [$base];
         }
-        return [];
+
+        $retval = [];
+        foreach ($base as $b) {
+            $server = count($this->Readers) === 1 ? $this->Readers[0] : $this->Writers[0];
+            switch ($scope) {
+                case 'base':
+                case 'Base':
+                case 'BAse':
+                case 'BASe':
+                case 'BASE':
+                    $retval[] = new LDAPHelperResult(@ldap_read($server->getConnection(), $b, $filter, $attrs), $server);
+                break;
+                case 'one':
+                case 'One':
+                case 'ONe':
+                case 'ONE':
+                    $retval[] = new LDAPHelperResult(@ldap_list($server->getConnection(), $b, $filter, $attrs), $server);
+                break;
+                case 'sub':
+                case 'Sub':
+                case 'SUb':
+                case 'SUB':
+                    $retval[] = new LDAPHelperResult(@ldap_search($server->getConnection(), $b, $filter, $attrs), $server);
+                break;
+            }
+        }
+        return $retval;
     }
 
     private function searchMultiple($base, $filter, $attrs, $scope): array
@@ -474,6 +484,15 @@ class LDAPHelper
     function search($base, $filter, $attr, $scope):array
     {
         $result = [];
+        /* use all known context */
+        if ($base === null) {
+            $base = [];
+            foreach ([$this->Readers, $this->Writers] as $servers) {
+                foreach ($servers as $server) {
+                    $base = array_merge($base, $server->getContext());
+                }
+            }
+        }
         if (count($this->Writers) + count($this->Readers) === 1) {
             $result = $this->searchSingle($base, $filter, $attr, $scope);
         } else {
