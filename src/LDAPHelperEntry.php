@@ -301,6 +301,14 @@ class LDAPHelperEntry {
         }
     }
 
+    function isBinary($attr) {
+        $binary = true;
+        if (isset($this->Entry['syntax'][$attr])) {
+            $binary = $this->Entry['syntax'][$attr]['binary'];
+        }
+        return $binary;
+    }
+
     /* get all attribute by removing option */
     function getAll($attr) {
         $unopted = $this->unoptName($attr);
